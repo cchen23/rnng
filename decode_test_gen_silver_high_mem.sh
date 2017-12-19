@@ -29,7 +29,7 @@ build/nt-parser/nt-parser-gen \
     --lstm_input_dim 256 \
     --hidden_dim 256 \
     -m  $model_file \
-    --greedy_decode_dev \
+    --decode_dev \
     --beam_within_word \
     --word_completion_is_shift \
     --decode_beam_size $beam_size \

@@ -100,22 +100,25 @@ void InitCommandLine(int argc, char** argv, po::variables_map* conf) {
         ("lstm_input_dim", po::value<unsigned>()->default_value(60), "LSTM input dimension")
         ("train,t", "Should training be run?")
         ("words,w", po::value<string>(), "Pretrained word embeddings")
-        ("greedy_decode_dev,g", "greedy decode")
+        ("no_history", "Don't encode the history")
+        ("no_buffer", "Don't encode the buffer")
+        ("text_format", "serialize models in text format")
+
+          /* decoding parameters */
+        ("decode_dev,g", "set this to do a decode (of the development corpus)")
         ("dev_output_file,O", po::value<string>(), "write decoded parse trees to this file")
         ("dev_beam_file", po::value<string>(), "write the beam at the end of decoding to this file")
-        ("beam_within_word", "greedy decode within word")
+        ("beam_within_word", "perform word-synchronous beam search")
         ("factored_ensemble_beam", "do beam search in each model in the ensemble separately, then take the union and rescore with the entire ensemble")
-        ("ignore_word_in_greedy,i", "greedy decode")
-        ("text_format", "serialize models in text format")
-        ("word_completion_is_shift,s", "consider a word completed when it's shifted for beaming and print purposes")
+        ("ignore_word_in_greedy,i", "ignore lexicalized part of probabilities in generative decoding (not recommended)")
+        ("word_completion_is_shift,s", "consider a word completed when it's shifted for beaming and printing purposes (recommended)")
         ("decode_beam_size,b", po::value<unsigned>()->default_value(1), "size of beam to use in decode")
         ("decode_beam_filter_at_word_size", po::value<int>()->default_value(-1), "when using beam_within_word, filter word completions to this size (defaults to decode_beam_size if < 0)")
         ("decode_shift_size", po::value<unsigned>()->default_value(0), "fast-forward this many shift candidates")
-        ("max_cons_nt", po::value<unsigned>()->default_value(8), "maximum number of non-terminals that can be opened consecutively")
-        ("no_history", "Don't encode the history")
-        ("no_buffer", "Don't encode the buffer")
+        ("max_cons_nt", po::value<unsigned>()->default_value(8), "maximum number of non-terminals that can be opened consecutively in decoding")
         ("block_count", po::value<unsigned>()->default_value(0), "divide the dev set up into this many blocks and only decode one of them (indexed by block_num)")
         ("block_num", po::value<unsigned>()->default_value(0), "decode only this block (0-indexed), must be used with block_count")
+
         ("help,h", "Help");
   po::options_description dcmdline_options;
   dcmdline_options.add(opts);
@@ -469,6 +472,14 @@ struct AbstractParser {
           int beam_filter_at_word_size,
           unsigned shift_size
   ) {
+      /**
+       * implements the word-level search with fast-track candidate selection described in
+       * https://arxiv.org/pdf/1707.08976.pdf
+       * beam_size: basic width of the beam, (k from the paper)
+       * beam_filter_at_word_size: if >= 0, sets a "bottleneck" size for word completion list, (k_w). otherwise no bottleneck will be applied
+       * shift_size: number of fast-track candidates to add to the completion list (k_s)
+       * returns: the final beam after the last word, a list of candidates and their negative log probabilities
+       */
     if (shift_size > 0) {
       assert(WORD_COMPLETION_IS_SHIFT);
     }
@@ -2566,8 +2577,8 @@ int main(int argc, char** argv) {
     cerr << "Please specify vocabulary clustering with --clusters FILE when training generative model\n";
     return 1;
   }
-  if(conf.count("beam_within_word") && !conf.count("greedy_decode_dev")) {
-    cerr << "Must specify greedy_decode_dev when passing beam_within_word" << endl;
+  if(conf.count("beam_within_word") && !conf.count("decode_dev")) {
+    cerr << "Must specify decode_dev when passing beam_within_word" << endl;
     return 1;
   }
   if (conf.count("dropout"))
@@ -2594,8 +2605,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  if (conf.count("train") && conf.count("greedy_decode_dev")) {
-    cerr << "Cannot specify --train with --greedy_decode_dev." << endl;
+  if (conf.count("train") && conf.count("decode_dev")) {
+    cerr << "Cannot specify --train with --decode_dev." << endl;
     return 1;
   }
 
@@ -2887,7 +2898,7 @@ int main(int argc, char** argv) {
       epoch++;
     }
   } // should do training?
-  if (conf.count("greedy_decode_dev")) { // do test evaluation
+  if (conf.count("decode_dev")) { // decode the dev set
     vector<std::shared_ptr<Model>> models;
     vector<std::shared_ptr<ParserBuilder>> parsers;
     vector<std::shared_ptr<ClassFactoredSoftmaxBuilder>> cfsms;
@@ -3002,7 +3013,6 @@ int main(int argc, char** argv) {
       double pred_nlp;
       vector<pair<vector<unsigned>, double>> beam;
       {
-        // greedy predict
         if (conf.count("beam_within_word"))
           beam = abstract_parser->abstract_log_prob_parser_beam_within_word(sentence,
                                                                             conf["decode_beam_size"].as<unsigned>(),
