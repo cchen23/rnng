@@ -207,6 +207,16 @@ void print_parse(const vector<unsigned>& actions, const parser::Sentence& senten
   out_stream << endl;
 }
 
+template <class T>
+void print_probs(vector<Stack<T>>& v) {
+  for(unsigned i = 0; i < v.size(); i++) {
+      Stack<T> st = v[i];
+      cout << "st size: " << st.size() << " ";
+      T x = st.back();
+      cout << "score: " << x.next_word_log_prob_v << " ";
+  }
+}
+
 struct AbstractParserState {
   virtual bool is_finished() = 0;
   virtual vector<unsigned> get_valid_actions(bool for_decode) = 0;
@@ -489,21 +499,23 @@ struct AbstractParser {
       beam_filter_at_word_size = beam_size;
     //cerr << "beam filter at word size:" << beam_filter_at_word_size << endl;
     struct BeamItem {
-      explicit BeamItem(std::shared_ptr<AbstractParserState> state, unsigned last_action, double score) :
-              state(state), last_action(last_action), score(score)  {}
+      explicit BeamItem(std::shared_ptr<AbstractParserState> state, unsigned last_action, double score, double next_word_log_prob_v = 0) :
+              state(state), last_action(last_action), score(score),  next_word_log_prob_v(next_word_log_prob_v) {}
       std::shared_ptr<AbstractParserState> state;
       unsigned last_action;
       double score;
+      double next_word_log_prob_v;
     };
 
     struct SuccessorItem {
-      explicit SuccessorItem(Stack<BeamItem> stack_item, unsigned action, unsigned word, double total_score, bool is_complete) :
-              stack_item(stack_item), action(action), word(word), total_score(total_score), is_complete(is_complete) {}
+      explicit SuccessorItem(Stack<BeamItem> stack_item, unsigned action, unsigned word, double total_score, bool is_complete, double next_word_log_prob_v = 0) :
+              stack_item(stack_item), action(action), word(word), total_score(total_score), is_complete(is_complete), next_word_log_prob_v(next_word_log_prob_v) {}
       Stack<BeamItem> stack_item;
       unsigned action;
       unsigned word;
       double total_score;
       bool is_complete;
+      double next_word_log_prob_v;
     };
 
     auto compare_successors = [](const SuccessorItem &t1, const SuccessorItem &t2) {
@@ -555,9 +567,10 @@ struct AbstractParser {
             const string &a = adict.Convert(action);
             bool is_complete = false;
             unsigned wordid = 0;
+            double next_word_log_prob_v;
             if (a[0] == 'S') {
               is_complete = current_termc < sent.size() - 1;
-              double next_word_log_prob_v = as_scalar(adiste_and_next_word_log_prob.second.value());
+              next_word_log_prob_v = as_scalar(adiste_and_next_word_log_prob.second.value());
               assert(has_next_word);
               wordid = next_word;
               action_score += next_word_log_prob_v;
@@ -566,7 +579,7 @@ struct AbstractParser {
             }
             //cerr << action_score << " ";
             double total_score = current_stack_item.back().score + action_score;
-            auto succ =  SuccessorItem(current_stack_item, action, wordid, total_score, is_complete);
+            auto succ =  SuccessorItem(current_stack_item, action, wordid, total_score, is_complete, next_word_log_prob_v);
             successors.push_back(succ);
                     //tuple<Stack<BeamItem>, unsigned, unsigned, double>(current_stack_item, action, wordid, total_score)
             if (is_complete) {
@@ -611,7 +624,8 @@ struct AbstractParser {
           Stack<BeamItem> successor_stack_item = successor.stack_item.push_back(
                   BeamItem(successor_parser_state,
                            successor.action,
-                           successor.total_score)
+                           successor.total_score,
+                           successor.next_word_log_prob_v)
           );
           if (successor_parser_state->word_completed())
             completed.push_back(successor_stack_item);
@@ -627,9 +641,14 @@ struct AbstractParser {
       // keep around a larger completion list if we're at the end of the sentence
       unsigned num_pruned_completion = std::min(current_termc < sent.size() - 1 ? beam_filter_at_word_size : beam_size, static_cast<unsigned>(completed.size()));
       std::copy(completed.begin(), completed.begin() + std::min(num_pruned_completion, (unsigned) completed.size()), std::back_inserter(beam));
-//      cout << "current_termc: " << current_termc << endl;
-//      cout << "continuing beam size: " << beam.size() << endl;
-//      cout << "completed size: " << completed.size() << endl;
+
+      cout << "current_termc: " << current_termc << endl;
+      cout << "continuing beam size: " << beam.size() << endl;
+      print_probs(beam);
+      cout << endl;
+      cout << "completed size: " << completed.size() << endl;
+      print_probs(completed);
+      cout << endl;
 //      cout << "word forced completions: " << forced_completions << endl;
     }
 
